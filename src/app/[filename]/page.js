@@ -31,6 +31,24 @@ export default function FilePage() {
   const [manualCaptionText, setManualCaptionText] = useState('');
   const [manualCaptionStart, setManualCaptionStart] = useState('');
   const [manualCaptionEnd, setManualCaptionEnd] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [videoStatus, setVideoStatus] = useState('INITIAL');
+  const [notifications, setNotifications] = useState({ success: null, error: null });
+
+  // Helper functions for notifications
+  const showSuccessNotification = (message) => {
+    setNotifications(prev => ({ ...prev, success: message }));
+    setTimeout(() => {
+      setNotifications(prev => ({ ...prev, success: null }));
+    }, 5000);
+  };
+
+  const showErrorNotification = (message) => {
+    setNotifications(prev => ({ ...prev, error: message }));
+    setTimeout(() => {
+      setNotifications(prev => ({ ...prev, error: null }));
+    }, 5000);
+  };
 
   // Poll transcription status from the API
   useEffect(() => {
@@ -252,8 +270,9 @@ export default function FilePage() {
   const handleCaptionEdit = (id) => {
     const caption = captions.find(c => c.id === id);
     if (caption) {
-      setEditingCaption(caption);
+      setEditingCaption({...caption}); // Create a copy of the caption
       setIsEditMode(true);
+      setActiveTab('editor'); // Switch to editor tab when editing
     }
   };
 
@@ -261,6 +280,12 @@ export default function FilePage() {
   const saveEditedCaption = () => {
     if (!editingCaption) return;
     
+    // Validate time format
+    if (editingCaption.start >= editingCaption.end) {
+      setError("End time must be after start time");
+      return;
+    }
+
     const updatedCaptions = captions.map(c => 
       c.id === editingCaption.id ? editingCaption : c
     );
@@ -268,6 +293,7 @@ export default function FilePage() {
     setCaptions(updatedCaptions);
     setIsEditMode(false);
     setEditingCaption(null);
+    setActiveTab('captions'); // Switch back to captions tab after saving
   };
 
   // Delete a caption
@@ -297,29 +323,58 @@ export default function FilePage() {
   // Embed captions into video using FFmpeg
   const embedCaptionsIntoVideo = async () => {
     if (captions.length === 0) {
-      setError("No captions to embed");
+      showErrorNotification("No captions to embed");
       return;
     }
 
+    setLoading(true);
     setProcessingVideo(true);
+    setError(null);
+
     try {
       // First, create an SRT file on the server
-      const response = await axios.post('/api/create-srt', {
+      const createSrtResponse = await axios.post('/api/create-srt', {
         captions,
         filename
       });
 
-      // Then, process the video with FFmpeg to embed captions
+      if (!createSrtResponse.data.success) {
+        throw new Error(createSrtResponse.data.error || 'Failed to create SRT file');
+      }
+
+      const srtFilename = createSrtResponse.data.srtFilename;
+
+      // Show processing state
+      showSuccessNotification('Processing video, please wait...');
+
+      // Process the video with FFmpeg to embed captions
       const processResponse = await axios.post('/api/process-video', {
         videoFile: filename,
-        srtFile: response.data.srtFilename
+        srtFile: srtFilename
       });
 
+      if (!processResponse.data.success) {
+        throw new Error(processResponse.data.error || 'Failed to process video');
+      }
+
+      // Update UI with the processed video URL
       setProcessedVideoUrl(processResponse.data.processedVideoUrl);
-      setProcessingVideo(false);
+      setVideoStatus('CAPTIONED');
+      showSuccessNotification('Video processed successfully!');
+
+      // Switch video source to the new processed video
+      if (videoRef.current) {
+        videoRef.current.src = processResponse.data.processedVideoUrl;
+        videoRef.current.load();
+      }
+
     } catch (err) {
       console.error('Error embedding captions:', err);
-      setError(err.response?.data?.error || err.message);
+      const errorMessage = err.response?.data?.error || err.message;
+      setError(errorMessage);
+      showErrorNotification(`Failed to embed captions: ${errorMessage}`);
+    } finally {
+      setLoading(false);
       setProcessingVideo(false);
     }
   };
@@ -345,6 +400,23 @@ export default function FilePage() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white">
+      {/* Add notifications at the top of the page */}
+      {notifications.success && (
+        <div className="fixed top-4 right-4 bg-green-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+          {notifications.success}
+        </div>
+      )}
+      {notifications.error && (
+        <div className="fixed top-4 right-4 bg-red-600 text-white px-6 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-5 h-5">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m9.344-2.998c-.175-.095-.795-.195-1.875-.195-1.08 0-1.7.1-1.875.195A.75.75 0 0118 9v.75m-9.344-2.998c.175-.095.795-.195 1.875-.195 1.08 0 1.7.1 1.875.195A.75.75 0 0110.5 9v.75" />
+          </svg>
+          {notifications.error}
+        </div>
+      )}
       {/* Header */}
       <header className="py-6 border-b border-white/10">
         <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -432,6 +504,7 @@ export default function FilePage() {
                   preload="auto"
                 />
                 
+                {/* Loading state */}
                 {isVideoLoading && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
                     <div className="flex flex-col items-center">
@@ -441,6 +514,7 @@ export default function FilePage() {
                   </div>
                 )}
 
+                {/* Error state */}
                 {videoError && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 backdrop-blur-sm">
                     <div className="bg-red-900/50 border border-red-800 p-4 rounded-lg max-w-md">
@@ -908,6 +982,28 @@ export default function FilePage() {
                   </svg>
                   Back to Home
                 </Link>
+
+                {captions.length > 0 && !processedVideoUrl && (
+                  <button 
+                    onClick={embedCaptionsIntoVideo}
+                    disabled={processingVideo}
+                    className={`w-full mt-3 bg-green-600 hover:bg-green-700 text-white p-3 rounded-lg transition-colors font-medium flex items-center justify-center gap-2 ${processingVideo ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  >
+                    {processingVideo ? (
+                      <>
+                        <div className="animate-spin rounded-full h-5 w-5 border-t-2 border-b-2 border-white"></div>
+                        <span>Processing Video...</span>
+                      </>
+                    ) : (
+                      <>
+                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="size-5">
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 20.25h12m-7.5-3v3m3-3v3m-10.125-3h17.25c.621 0 1.125-.504 1.125-1.125V4.875c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125z" />
+                        </svg>
+                        Embed Captions in Video
+                      </>
+                    )}
+                  </button>
+                )}
 
                 {processedVideoUrl && (
                   <a 

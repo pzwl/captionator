@@ -1,12 +1,24 @@
-module.exports = {
-  experimental: {
-    esmExternals: false, // or add ffmpeg-static to externals in webpack if needed
-  },
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   webpack: (config, { isServer }) => {
+    // This is required for ffmpeg-static to work properly
     if (isServer) {
-      config.externals = config.externals || [];
-      config.externals.push('ffmpeg-static');
+      config.externals = [...(config.externals || []), 'ffmpeg-static'];
     }
-    return config;
-  }
+
+    return {
+      ...config,
+      resolve: {
+        ...config.resolve,
+        fallback: {
+          ...config.resolve?.fallback,
+          fs: false,
+          path: false,
+          stream: false,
+        },
+      },
+    };
+  },
 }
+
+module.exports = nextConfig
